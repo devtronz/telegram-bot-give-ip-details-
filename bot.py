@@ -1,8 +1,8 @@
 import os
-import threading
-from flask import Flask
+from flask import Flask, request, abort
 import telebot
 import requests
+import json
 
 app = Flask(__name__)
 
@@ -14,7 +14,8 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN environment variable is not set! Set it in Render → Environment tab.")
 
-bot = telebot.TeleBot(BOT_TOKEN)
+# Create bot instance WITHOUT threading (required on Render free tier)
+bot = telebot.TeleBot(BOT_TOKEN, threaded=False)
 
 # ────────────────────────────────────────────────
 # Helper to escape special characters for MarkdownV2
@@ -66,7 +67,6 @@ def ip_lookup(message):
     ip = message.text.strip()
 
     try:
-        # ip-api.com – free, no key, rich data
         url = (
             f"http://ip-api.com/json/{ip}?"
             "fields=status,message,query,country,countryCode,regionName,region,"
@@ -77,7 +77,6 @@ def ip_lookup(message):
         data = r.json()
 
         if data.get('status') == 'success':
-            # Escape only the fields that can contain problematic characters
             country     = escape_md_v2(data['country'])
             countryCode = escape_md_v2(data['countryCode'])
             regionName  = escape_md_v2(data['regionName'])
@@ -118,28 +117,54 @@ def ip_lookup(message):
     bot.reply_to(message, reply, parse_mode='MarkdownV2')
 
 # ────────────────────────────────────────────────
-# Flask routes (required for Render Web Service)
+# Webhook endpoint – Telegram sends POST requests here
 # ────────────────────────────────────────────────
-@app.route('/')
-def home():
-    return "Telegram IP Lookup Bot is running 🚀"
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = telebot.types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return '', 200
+    else:
+        abort(403)
 
+# Simple health check route (Render likes this)
+@app.route('/')
 @app.route('/health')
 def health():
-    return "OK", 200
+    return "Telegram IP Lookup Bot is running via webhook 🚀", 200
 
 # ────────────────────────────────────────────────
-# Run bot polling in background thread + Flask server
+# Set webhook on startup (only once per deploy)
 # ────────────────────────────────────────────────
-def run_bot():
-    print("Starting Telegram bot polling...")
-    bot.infinity_polling(none_stop=True, interval=0, timeout=20)
-
 if __name__ == "__main__":
-    # Start bot polling in a separate thread
-    threading.Thread(target=run_bot, daemon=True).start()
+    # Get the public URL Render provides (automatic env var)
+    render_hostname = os.environ.get("RENDER_EXTERNAL_HOSTNAME")
+    if not render_hostname:
+        raise ValueError("RENDER_EXTERNAL_HOSTNAME not found – are you running on Render?")
 
-    # Start Flask server (Render requires this)
+    webhook_url = f"https://{render_hostname}/webhook"
+
+    print(f"Preparing to set webhook to: {webhook_url}")
+
+    try:
+        # Clear any old webhook or polling first
+        bot.remove_webhook(drop_pending_updates=True)
+        print("Old webhook/polling removed (if any)")
+
+        # Set the new webhook
+        bot.set_webhook(
+            url=webhook_url,
+            drop_pending_updates=True,   # Clear queue on switch
+            allowed_updates=["message"]  # Only need text messages for this bot
+        )
+        print(f"Webhook successfully set to {webhook_url}")
+    except Exception as e:
+        print(f"Failed to set webhook: {e}")
+        # Don't crash the app – Render will restart if needed
+
+    # Start Flask
     port = int(os.environ.get("PORT", 5000))
     print(f"Starting Flask server on port {port}")
     app.run(host="0.0.0.0", port=port, debug=False)
