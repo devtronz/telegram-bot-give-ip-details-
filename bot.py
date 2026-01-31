@@ -17,10 +17,9 @@ if not BOT_TOKEN:
 bot = telebot.TeleBot(BOT_TOKEN, threaded=False)
 
 # ────────────────────────────────────────────────
-# Escape helper for MarkdownV2
+# Escape helper for MarkdownV2 (used only in welcome)
 # ────────────────────────────────────────────────
 def escape_md_v2(text: str) -> str:
-    """Escape all reserved MarkdownV2 characters"""
     chars = r'_[]()~`>#+-=|{}.!'
     for c in chars:
         text = text.replace(c, f'\\{c}')
@@ -41,7 +40,7 @@ def is_valid_ip(ip_str: str) -> bool:
             return False
 
 # ────────────────────────────────────────────────
-# /start and /myip handler
+# /start and /myip handler — uses MarkdownV2 (static & safe)
 # ────────────────────────────────────────────────
 @bot.message_handler(commands=['start', 'myip'])
 def send_welcome(message):
@@ -76,11 +75,15 @@ def send_welcome(message):
         "`2001:4860:4860::8888`"
     )
 
-    # Use send_message instead of reply_to to avoid "message not found" in webhook mode
-    bot.send_message(message.chat.id, text, parse_mode='MarkdownV2', reply_markup=markup)
+    bot.send_message(
+        message.chat.id,
+        text,
+        parse_mode='MarkdownV2',
+        reply_markup=markup
+    )
 
 # ────────────────────────────────────────────────
-# IP lookup (IPv4 + IPv6)
+# IP lookup handler — PLAIN TEXT only (avoids all parsing errors)
 # ────────────────────────────────────────────────
 @bot.message_handler(func=lambda message: is_valid_ip(message.text.strip()))
 def lookup_ip(message):
@@ -98,44 +101,32 @@ def lookup_ip(message):
 
         if data.get('status') != 'success':
             text = (
-                f"❌ Lookup failed for **{escape_md_v2(ip)}**\n"
-                f"Reason: {escape_md_v2(data.get('message', 'Unknown error'))}"
+                f"❌ Lookup failed for {ip}\n"
+                f"Reason: {data.get('message', 'Unknown error')}"
             )
         else:
-            country     = escape_md_v2(data.get('country', 'N/A'))
-            cc          = escape_md_v2(data.get('countryCode', 'N/A'))
-            region_name = escape_md_v2(data.get('regionName', 'N/A'))
-            region      = escape_md_v2(data.get('region', 'N/A'))
-            city        = escape_md_v2(data.get('city', 'N/A'))
-            zip_code    = escape_md_v2(data.get('zip', 'N/A'))
-            tz          = escape_md_v2(data.get('timezone', 'N/A'))
-            isp         = escape_md_v2(data.get('isp', 'N/A'))
-            org         = escape_md_v2(data.get('org', 'N/A'))
-            asn         = escape_md_v2(data.get('as', 'N/A'))
-
             text = (
-                f"**IP Lookup** \\(data similar to whatismyipaddress\\.com\\)\n\n"
-                f"**{escape_md_v2(data['query'])}**\n\n"
-                f"🌍 Country: {country} \\({cc}\\)\n"
-                f"🏞 Region: {region_name} \\({region}\\)\n"
-                f"🏙 City: {city}\n"
-                f"📮 ZIP: {zip_code}\n"
+                f"IP Lookup (similar to whatismyipaddress.com)\n\n"
+                f"{data['query']}\n\n"
+                f"🌍 Country: {data.get('country', 'N/A')} ({data.get('countryCode', 'N/A')})\n"
+                f"🏞 Region: {data.get('regionName', 'N/A')} ({data.get('region', 'N/A')})\n"
+                f"🏙 City: {data.get('city', 'N/A')}\n"
+                f"📮 ZIP: {data.get('zip', 'N/A')}\n"
                 f"📍 Lat/Lon: {data.get('lat', 'N/A')}, {data.get('lon', 'N/A')}\n"
-                f"🕒 Timezone: {tz}\n"
-                f"🌐 ISP: {isp}\n"
-                f"🏢 Org: {org}\n"
-                f"🔗 AS: {asn}\n"
+                f"🕒 Timezone: {data.get('timezone', 'N/A')}\n"
+                f"🌐 ISP: {data.get('isp', 'N/A')}\n"
+                f"🏢 Org: {data.get('org', 'N/A')}\n"
+                f"🔗 AS: {data.get('as', 'N/A')}\n"
                 f"📱 Mobile?: {'Yes' if data.get('mobile') else 'No'}\n"
                 f"🕵️ Proxy/VPN/Hosting?: {'Yes' if data.get('proxy') or data.get('hosting') else 'No'}"
             )
 
     except requests.RequestException as e:
-        text = f"⚠️ Network problem while looking up **{escape_md_v2(ip)}**\\.\n{escape_md_v2(str(e))}"
+        text = f"⚠️ Network problem while looking up {ip}.\n{str(e)}"
     except Exception as e:
-        text = f"❗ Something went wrong\\.\n{escape_md_v2(str(e))}"
+        text = f"❗ Something went wrong.\n{str(e)}"
 
-    # Use send_message instead of reply_to to avoid "message not found" in webhook mode
-    bot.send_message(message.chat.id, text, parse_mode='MarkdownV2')
+    bot.send_message(message.chat.id, text)
 
 # ────────────────────────────────────────────────
 # Webhook endpoint
