@@ -1,41 +1,54 @@
 import os
+import socket
 from flask import Flask, request, abort
 import telebot
 import requests
-import json
 
 app = Flask(__name__)
 
 # ────────────────────────────────────────────────
-# Load Telegram Bot Token from environment variable
+# Load bot token securely from environment
 # ────────────────────────────────────────────────
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
 if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN environment variable is not set! Set it in Render → Environment tab.")
+    raise ValueError("BOT_TOKEN environment variable is missing. Set it in Render → Environment.")
 
-# Create bot instance WITHOUT threading (required on Render free tier)
 bot = telebot.TeleBot(BOT_TOKEN, threaded=False)
 
 # ────────────────────────────────────────────────
-# Helper to escape special characters for MarkdownV2
+# Escape helper for MarkdownV2
 # ────────────────────────────────────────────────
 def escape_md_v2(text: str) -> str:
-    """Escape Telegram MarkdownV2 special characters"""
-    chars_to_escape = r'_[]()~`>#+-=|{}.!'
-    for char in chars_to_escape:
-        text = text.replace(char, f'\\{char}')
+    """Escape characters that have special meaning in Telegram MarkdownV2"""
+    chars = r'_[]()~`>#+-=|{}.!'
+    for c in chars:
+        text = text.replace(c, f'\\{c}')
     return text
 
 # ────────────────────────────────────────────────
-# /start and /myip command – shows help + links
+# Validate IPv4 or IPv6 address
+# ────────────────────────────────────────────────
+def is_valid_ip(ip_str: str) -> bool:
+    try:
+        socket.inet_pton(socket.AF_INET, ip_str)
+        return True
+    except socket.error:
+        try:
+            socket.inet_pton(socket.AF_INET6, ip_str)
+            return True
+        except socket.error:
+            return False
+
+# ────────────────────────────────────────────────
+# /start and /myip — welcome message + links
 # ────────────────────────────────────────────────
 @bot.message_handler(commands=['start', 'myip'])
-def help_message(message):
+def send_welcome(message):
     markup = telebot.types.InlineKeyboardMarkup(row_width=1)
     markup.add(
         telebot.types.InlineKeyboardButton(
-            "Check My Own IP + Full Details",
+            "Check My Own IP + Details",
             url="https://whatismyipaddress.com"
         )
     )
@@ -47,23 +60,26 @@ def help_message(message):
     )
 
     text = (
-        f"Hi {escape_md_v2(message.from_user.first_name)}! 👋\n"
-        "Telegram doesn't share your real IP with bots \\(privacy first\\).\n\n"
-        "Tap the buttons above to see your own public IP details \\(like on whatismyipaddress\\.com\\).\n\n"
-        "Or send me any IP address \\(example: `8\\.8\\.8\\.8`\\) and I'll show:\n"
-        "• Country, city, region\n"
-        "• ISP, organization\n"
-        "• Coordinates, timezone\n"
-        "• Proxy/VPN status\n"
+        f"Hi {escape_md_v2(message.from_user.first_name)}! 👋\n\n"
+        "I can't see your IP \\(Telegram privacy\\).\n\n"
+        "Use the buttons above to check **your own** IP like whatismyipaddress\\.com does.\n\n"
+        "Or send me any IPv4 or IPv6 address and I'll show you:\n"
+        "• Country / Region / City\n"
+        "• ISP / Organization\n"
+        "• Coordinates / Timezone\n"
+        "• Mobile / Proxy / Hosting flags\n\n"
+        "Examples:\n"
+        "`8.8.8.8`\n"
+        "`2001:4860:4860::8888`"
     )
 
     bot.reply_to(message, text, parse_mode='MarkdownV2', reply_markup=markup)
 
 # ────────────────────────────────────────────────
-# Handle messages that look like IPv4 addresses
+# IP lookup handler (IPv4 + IPv6)
 # ────────────────────────────────────────────────
-@bot.message_handler(regexp=r'\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b')
-def ip_lookup(message):
+@bot.message_handler(func=lambda message: is_valid_ip(message.text.strip()))
+def lookup_ip(message):
     ip = message.text.strip()
 
     try:
@@ -72,55 +88,55 @@ def ip_lookup(message):
             "fields=status,message,query,country,countryCode,regionName,region,"
             "city,zip,lat,lon,timezone,isp,org,as,mobile,proxy,hosting"
         )
-        r = requests.get(url, timeout=8)
-        r.raise_for_status()
-        data = r.json()
+        resp = requests.get(url, timeout=8)
+        resp.raise_for_status()
+        data = resp.json()
 
-        if data.get('status') == 'success':
-            country     = escape_md_v2(data['country'])
-            countryCode = escape_md_v2(data['countryCode'])
-            regionName  = escape_md_v2(data['regionName'])
-            region      = escape_md_v2(data['region'])
-            city        = escape_md_v2(data['city'])
-            zip_code    = escape_md_v2(data.get('zip', 'N/A'))
-            timezone    = escape_md_v2(data['timezone'])
-            isp         = escape_md_v2(data['isp'])
-            org         = escape_md_v2(data.get('org', 'N/A'))
-            as_info     = escape_md_v2(data.get('as', 'N/A'))
-
-            reply = (
-                f"**IP Lookup Results** \\(similar to whatismyipaddress\\.com\\):\n\n"
-                f"IP: **{data['query']}**\n\n"
-                f"🌍 Country: {country} \\({countryCode}\\)\n"
-                f"🏞️ Region: {regionName} \\({region}\\)\n"
-                f"🏙️ City: {city}\n"
-                f"📮 ZIP/Postal: {zip_code}\n"
-                f"📍 Coordinates: {data['lat']}, {data['lon']}\n"
-                f"🕒 Timezone: {timezone}\n"
-                f"🌐 ISP: {isp}\n"
-                f"🏢 Organization: {org}\n"
-                f"🔗 AS: {as_info}\n"
-                f"📱 Mobile network?: {'Yes' if data.get('mobile') else 'No'}\n"
-                f"🕵️ Proxy/VPN/Hosting?: {'Yes' if data.get('proxy') or data.get('hosting') else 'No'}"
+        if data.get('status') != 'success':
+            text = (
+                f"❌ Lookup failed for **{escape_md_v2(ip)}**\n"
+                f"Reason: {escape_md_v2(data.get('message', 'Unknown error'))}"
             )
         else:
-            reply = (
-                f"❌ Lookup failed\n"
-                f"Message: {escape_md_v2(data.get('message', 'Unknown error'))}"
+            country     = escape_md_v2(data.get('country', 'N/A'))
+            cc          = escape_md_v2(data.get('countryCode', 'N/A'))
+            region_name = escape_md_v2(data.get('regionName', 'N/A'))
+            region      = escape_md_v2(data.get('region', 'N/A'))
+            city        = escape_md_v2(data.get('city', 'N/A'))
+            zip_code    = escape_md_v2(data.get('zip', 'N/A'))
+            tz          = escape_md_v2(data.get('timezone', 'N/A'))
+            isp         = escape_md_v2(data.get('isp', 'N/A'))
+            org         = escape_md_v2(data.get('org', 'N/A'))
+            asn         = escape_md_v2(data.get('as', 'N/A'))
+
+            text = (
+                f"**IP Lookup**  \\(similar to whatismyipaddress\\.com\\)\n\n"
+                f"**{escape_md_v2(data['query'])}**\n\n"
+                f"🌍 Country: {country} \\({cc}\\)\n"
+                f"🏞 Region: {region_name} \\({region}\\)\n"
+                f"🏙 City: {city}\n"
+                f"📮 ZIP: {zip_code}\n"
+                f"📍 Lat/Lon: {data.get('lat', 'N/A')}, {data.get('lon', 'N/A')}\n"
+                f"🕒 Timezone: {tz}\n"
+                f"🌐 ISP: {isp}\n"
+                f"🏢 Org: {org}\n"
+                f"🔗 AS: {asn}\n"
+                f"📱 Mobile?: {'Yes' if data.get('mobile') else 'No'}\n"
+                f"🕵️ Proxy/VPN/Hosting?: {'Yes' if data.get('proxy') or data.get('hosting') else 'No'}"
             )
 
-    except requests.exceptions.RequestException as e:
-        reply = f"⚠️ Network error while fetching IP info: {escape_md_v2(str(e))}"
+    except requests.RequestException as e:
+        text = f"⚠️ Could not reach lookup service\\.\n{escape_md_v2(str(e))}"
     except Exception as e:
-        reply = f"❗ Unexpected error: {escape_md_v2(str(e))}\nTry again later."
+        text = f"❗ Internal error\\.\n{escape_md_v2(str(e))}"
 
-    bot.reply_to(message, reply, parse_mode='MarkdownV2')
+    bot.reply_to(message, text, parse_mode='MarkdownV2')
 
 # ────────────────────────────────────────────────
-# Webhook endpoint – Telegram sends POST requests here
+# Webhook route
 # ────────────────────────────────────────────────
 @app.route('/webhook', methods=['POST'])
-def webhook():
+def telegram_webhook():
     if request.headers.get('content-type') == 'application/json':
         json_string = request.get_data().decode('utf-8')
         update = telebot.types.Update.de_json(json_string)
@@ -129,42 +145,42 @@ def webhook():
     else:
         abort(403)
 
-# Simple health check route (Render likes this)
+# Health check (Render / monitoring)
 @app.route('/')
 @app.route('/health')
-def health():
-    return "Telegram IP Lookup Bot is running via webhook 🚀", 200
+def health_check():
+    return "Bot is alive (webhook mode)", 200
 
 # ────────────────────────────────────────────────
-# Set webhook on startup (only once per deploy)
+# Set webhook on startup
 # ────────────────────────────────────────────────
 if __name__ == "__main__":
-    # Get the public URL Render provides (automatic env var)
-    render_hostname = os.environ.get("RENDER_EXTERNAL_HOSTNAME")
-    if not render_hostname:
-        raise ValueError("RENDER_EXTERNAL_HOSTNAME not found – are you running on Render?")
+    hostname = os.environ.get("RENDER_EXTERNAL_HOSTNAME")
+    if not hostname:
+        raise RuntimeError("RENDER_EXTERNAL_HOSTNAME environment variable not found")
 
-    webhook_url = f"https://{render_hostname}/webhook"
+    webhook_url = f"https://{hostname}/webhook"
 
-    print(f"Preparing to set webhook to: {webhook_url}")
+    print(f"Setting webhook → {webhook_url}")
 
     try:
-        # Clear any old webhook or polling first
-        bot.remove_webhook(drop_pending_updates=True)
-        print("Old webhook/polling removed (if any)")
+        # Remove any previous webhook
+        bot.remove_webhook()
+        print("Previous webhook removed")
 
-        # Set the new webhook
-        bot.set_webhook(
+        # Set new webhook
+        success = bot.set_webhook(
             url=webhook_url,
-            drop_pending_updates=True,   # Clear queue on switch
-            allowed_updates=["message"]  # Only need text messages for this bot
+            allowed_updates=["message"]
         )
-        print(f"Webhook successfully set to {webhook_url}")
+        if success:
+            print("Webhook set successfully")
+        else:
+            print("set_webhook returned False")
     except Exception as e:
-        print(f"Failed to set webhook: {e}")
-        # Don't crash the app – Render will restart if needed
+        print(f"Webhook setup failed: {str(e)}")
+        # Do **not** crash — let the service run anyway
 
-    # Start Flask
     port = int(os.environ.get("PORT", 5000))
-    print(f"Starting Flask server on port {port}")
+    print(f"Starting server on port {port}")
     app.run(host="0.0.0.0", port=port, debug=False)
