@@ -7,7 +7,7 @@ import requests
 app = Flask(__name__)
 
 # ────────────────────────────────────────────────
-# Load bot token securely from environment
+# Load bot token from environment
 # ────────────────────────────────────────────────
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
@@ -20,14 +20,14 @@ bot = telebot.TeleBot(BOT_TOKEN, threaded=False)
 # Escape helper for MarkdownV2
 # ────────────────────────────────────────────────
 def escape_md_v2(text: str) -> str:
-    """Escape characters that have special meaning in Telegram MarkdownV2"""
+    """Escape all reserved MarkdownV2 characters"""
     chars = r'_[]()~`>#+-=|{}.!'
     for c in chars:
         text = text.replace(c, f'\\{c}')
     return text
 
 # ────────────────────────────────────────────────
-# Validate IPv4 or IPv6 address
+# Validate IPv4 or IPv6
 # ────────────────────────────────────────────────
 def is_valid_ip(ip_str: str) -> bool:
     try:
@@ -41,7 +41,7 @@ def is_valid_ip(ip_str: str) -> bool:
             return False
 
 # ────────────────────────────────────────────────
-# /start and /myip — welcome message + links
+# /start and /myip handler
 # ────────────────────────────────────────────────
 @bot.message_handler(commands=['start', 'myip'])
 def send_welcome(message):
@@ -59,24 +59,27 @@ def send_welcome(message):
         )
     )
 
+    username = escape_md_v2(message.from_user.first_name or "there")
+
     text = (
-        f"Hi {escape_md_v2(message.from_user.first_name)}! 👋\n\n"
-        "I can't see your IP \\(Telegram privacy\\).\n\n"
-        "Use the buttons above to check **your own** IP like whatismyipaddress\\.com does.\n\n"
-        "Or send me any IPv4 or IPv6 address and I'll show you:\n"
+        f"Hi {username}\\! 👋\n\n"
+        "I can't see your IP \\(Telegram keeps it private\\)\\.\n\n"
+        "Use the buttons above to see **your own** public IP details "
+        "the same way whatismyipaddress\\.com shows them\\.\n\n"
+        "Or just send me any IPv4 or IPv6 address and I'll look it up for you:\n"
         "• Country / Region / City\n"
         "• ISP / Organization\n"
         "• Coordinates / Timezone\n"
         "• Mobile / Proxy / Hosting flags\n\n"
         "Examples:\n"
-        "`8.8.8.8`\n"
+        "`8\\.8\\.8\\.8`\n"
         "`2001:4860:4860::8888`"
     )
 
     bot.reply_to(message, text, parse_mode='MarkdownV2', reply_markup=markup)
 
 # ────────────────────────────────────────────────
-# IP lookup handler (IPv4 + IPv6)
+# IP lookup (IPv4 + IPv6)
 # ────────────────────────────────────────────────
 @bot.message_handler(func=lambda message: is_valid_ip(message.text.strip()))
 def lookup_ip(message):
@@ -110,7 +113,7 @@ def lookup_ip(message):
             asn         = escape_md_v2(data.get('as', 'N/A'))
 
             text = (
-                f"**IP Lookup**  \\(similar to whatismyipaddress\\.com\\)\n\n"
+                f"**IP Lookup** \\(data similar to whatismyipaddress\\.com\\)\n\n"
                 f"**{escape_md_v2(data['query'])}**\n\n"
                 f"🌍 Country: {country} \\({cc}\\)\n"
                 f"🏞 Region: {region_name} \\({region}\\)\n"
@@ -126,14 +129,14 @@ def lookup_ip(message):
             )
 
     except requests.RequestException as e:
-        text = f"⚠️ Could not reach lookup service\\.\n{escape_md_v2(str(e))}"
+        text = f"⚠️ Network problem while looking up **{escape_md_v2(ip)}**\\.\n{escape_md_v2(str(e))}"
     except Exception as e:
-        text = f"❗ Internal error\\.\n{escape_md_v2(str(e))}"
+        text = f"❗ Something went wrong\\.\n{escape_md_v2(str(e))}"
 
     bot.reply_to(message, text, parse_mode='MarkdownV2')
 
 # ────────────────────────────────────────────────
-# Webhook route
+# Webhook endpoint
 # ────────────────────────────────────────────────
 @app.route('/webhook', methods=['POST'])
 def telegram_webhook():
@@ -145,41 +148,35 @@ def telegram_webhook():
     else:
         abort(403)
 
-# Health check (Render / monitoring)
+# Health check route
 @app.route('/')
 @app.route('/health')
 def health_check():
-    return "Bot is alive (webhook mode)", 200
+    return "Bot is running (webhook mode)", 200
 
 # ────────────────────────────────────────────────
-# Set webhook on startup
+# Set webhook when the app starts
 # ────────────────────────────────────────────────
 if __name__ == "__main__":
     hostname = os.environ.get("RENDER_EXTERNAL_HOSTNAME")
     if not hostname:
-        raise RuntimeError("RENDER_EXTERNAL_HOSTNAME environment variable not found")
+        raise RuntimeError("RENDER_EXTERNAL_HOSTNAME not found – are you running on Render?")
 
     webhook_url = f"https://{hostname}/webhook"
 
     print(f"Setting webhook → {webhook_url}")
 
     try:
-        # Remove any previous webhook
         bot.remove_webhook()
         print("Previous webhook removed")
 
-        # Set new webhook
         success = bot.set_webhook(
             url=webhook_url,
             allowed_updates=["message"]
         )
-        if success:
-            print("Webhook set successfully")
-        else:
-            print("set_webhook returned False")
+        print("Webhook set successfully" if success else "set_webhook returned False")
     except Exception as e:
         print(f"Webhook setup failed: {str(e)}")
-        # Do **not** crash — let the service run anyway
 
     port = int(os.environ.get("PORT", 5000))
     print(f"Starting server on port {port}")
