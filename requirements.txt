@@ -1,0 +1,3 @@
+pyTelegramBotAPI
+requests
+flask   # ← add this for the web server
