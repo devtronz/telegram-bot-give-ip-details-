@@ -76,7 +76,8 @@ def send_welcome(message):
         "`2001:4860:4860::8888`"
     )
 
-    bot.reply_to(message, text, parse_mode='MarkdownV2', reply_markup=markup)
+    # Use send_message instead of reply_to to avoid "message not found" in webhook mode
+    bot.send_message(message.chat.id, text, parse_mode='MarkdownV2', reply_markup=markup)
 
 # ────────────────────────────────────────────────
 # IP lookup (IPv4 + IPv6)
@@ -133,7 +134,8 @@ def lookup_ip(message):
     except Exception as e:
         text = f"❗ Something went wrong\\.\n{escape_md_v2(str(e))}"
 
-    bot.reply_to(message, text, parse_mode='MarkdownV2')
+    # Use send_message instead of reply_to to avoid "message not found" in webhook mode
+    bot.send_message(message.chat.id, text, parse_mode='MarkdownV2')
 
 # ────────────────────────────────────────────────
 # Webhook endpoint
